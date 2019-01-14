@@ -22,6 +22,9 @@ struct fsverity_operations {
 
 #ifdef CONFIG_FS_VERITY
 
+/* ioctl.c */
+extern int fsverity_ioctl_enable(struct file *filp, const void __user *arg);
+
 /* setup.c */
 extern int fsverity_file_open(struct inode *inode, struct file *filp);
 extern int fsverity_prepare_setattr(struct dentry *dentry, struct iattr *attr);
@@ -40,6 +43,14 @@ static inline bool fsverity_check_hole(struct inode *inode, struct page *page)
 }
 
 #else /* !CONFIG_FS_VERITY */
+
+/* ioctl.c */
+
+static inline int fsverity_ioctl_enable(struct file *filp,
+					const void __user *arg)
+{
+	return -EOPNOTSUPP;
+}
 
 /* setup.c */
 
