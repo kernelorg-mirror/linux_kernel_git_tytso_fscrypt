@@ -3885,6 +3885,9 @@ static ssize_t ext4_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 		return 0;
 #endif
 
+	if (IS_VERITY(inode))
+		return 0;
+
 	/*
 	 * If we are doing data journalling we don't support O_DIRECT
 	 */
