@@ -1,0 +1,159 @@
+From 522a239ad11cc8032cd0ebadc1e9403177c63a72 Mon Sep 17 00:00:00 2001
+From: Eric Biggers <ebiggers@kernel.org>
+Date: Mon, 14 Jan 2019 15:57:38 -0800
+Subject: [PATCH v3 00/13] fs-verity: read-only file-based authenticity protection
+
+Hello,
+
+This patchset implements fs-verity for ext4 and f2fs.  fs-verity is
+similar to dm-verity, but implemented on a per-file basis: a Merkle tree
+is used to measure (hash) the file's data as it is paged in.  ext4 and
+f2fs hide this Merkle tree beyond the end of the file, though other
+filesystems might implement it differently in the future.  In general,
+fs-verity is intended for use on writable filesystems; dm-verity is
+still recommended on read-only ones.
+
+Similar to fscrypt, most of the code is in fs/verity/, and not too many
+filesystem-specific changes are needed.  The Merkle tree is written by
+userspace before calling an ioctl to mark the file as a verity file; the
+file then becomes read-only and the verity metadata is hidden or moved.
+
+fs-verity provides a file measurement (hash) in constant time and
+verifies data on-demand.  Thus, it is useful for efficiently verifying
+the authenticity of large files of which only a small portion may be
+accessed, such as Android application package (APK) files.  It may also
+be useful in "audit" use cases where file hashes are logged.
+
+fs-verity also provides better protection against malicious disks than
+an ahead-of-time hash, since fs-verity re-verifies data each time it's
+paged in.  Note, however, that any authenticity guarantee is still
+dependent on verification of the file measurement and other relevant
+metadata in a way that makes sense for the overall system; fs-verity is
+only a tool to help with this.
+
+This patchset doesn't yet include IMA support for fs-verity file
+measurements.  This is planned and we'd like to collaborate with the IMA
+maintainers.  Although fs-verity can be used on its own without IMA,
+fs-verity is primarily a lower level feature (think of it as a way of
+hashing a file), so some users may still need IMA's policy mechanism.
+However, an optional in-kernel signature verification mechanism within
+fs-verity itself is also included.
+
+This patchset is based on v5.0-rc2.  It can also be found in git at tag
+TODO of:
+
+	https://git.kernel.org/pub/scm/linux/kernel/git/ebiggers/linux.git
+
+fs-verity has a userspace utility:
+
+	https://git.kernel.org/pub/scm/linux/kernel/git/ebiggers/fsverity-utils.git
+
+xfstests for fs-verity can be found at branch "fsverity" of:
+
+	https://git.kernel.org/pub/scm/linux/kernel/git/ebiggers/xfstests-dev.git
+
+fs-verity is supported by e2fsprogs v1.44.5+ and f2fs-tools v1.11.0+.
+
+Please see the documentation file Documentation/filesystems/fsverity.rst
+(added by patch 1) for details; this cover letter only gave an overview.
+Examples of setting up fs-verity protected files can also be found in
+the README file of fsverity-utils.
+
+Other useful references include:
+
+    - LWN coverage of v1 patchset: https://lwn.net/Articles/763729/
+
+    - LWN coverage of v2 patchset: https://lwn.net/Articles/775872/
+
+    - Presentation at Linux Security Summit North America 2018:
+        - Slides: https://schd.ws/hosted_files/lssna18/af/fs-verity%20slide%20deck.pdf
+        - Video: https://www.youtube.com/watch?v=Aw5h6aBhu6M
+
+    - Notes from discussion at LSFMM 2018: https://lwn.net/Articles/752614/
+
+Changed since v2:
+
+- Replace filesystem-specific fs-verity kconfig options with
+  CONFIG_FS_VERITY.
+- Replace filesystem-specific verity bit checks with IS_VERITY().
+- Give the ext4 and f2fs bio_post_read_ctx caches different names.
+- Some documentation tweaks.
+- Added fsverity_operations::read_metadata_page().
+- Other small cleanups.
+
+Changed since v1:
+
+- Added documentation file.
+- Require write permission for FS_IOC_ENABLE_VERITY, rather than
+  CAP_SYS_ADMIN.
+- Eliminated dependency on CONFIG_BLOCK and clarified that filesystems
+  can verify a page at a time rather than a bio at a time.
+- Fixed conditions for verifying holes.
+- ext4 now only allows fs-verity on extent-based files.
+- Eliminated most of the assumptions that the verity metadata is stored
+  beyond EOF, in case filesystems want to do things differently.
+- Other cleanups.
+
+Chandan Rajendra (1):
+  fs, fs-verity: add S_VERITY and IS_VERITY()
+
+Eric Biggers (12):
+  fs-verity: add a documentation file
+  fs-verity: add setup code, UAPI, and Kconfig
+  fs-verity: add MAINTAINERS file entry
+  fs-verity: add data verification hooks for ->readpages()
+  fs-verity: implement FS_IOC_ENABLE_VERITY ioctl
+  fs-verity: implement FS_IOC_MEASURE_VERITY ioctl
+  fs-verity: add SHA-512 support
+  fs-verity: add CRC-32C support
+  fs-verity: support builtin file signatures
+  ext4: add basic fs-verity support
+  ext4: add fs-verity read support
+  f2fs: fs-verity support
+
+ Documentation/filesystems/fsverity.rst | 585 ++++++++++++++++
+ Documentation/filesystems/index.rst    |  11 +
+ Documentation/ioctl/ioctl-number.txt   |   1 +
+ MAINTAINERS                            |  12 +
+ fs/Kconfig                             |   2 +
+ fs/Makefile                            |   1 +
+ fs/ext4/ext4.h                         |  11 +-
+ fs/ext4/file.c                         |   4 +
+ fs/ext4/inode.c                        |  13 +-
+ fs/ext4/ioctl.c                        |  12 +
+ fs/ext4/readpage.c                     | 211 +++++-
+ fs/ext4/super.c                        | 109 ++-
+ fs/ext4/sysfs.c                        |   6 +
+ fs/f2fs/data.c                         |  47 +-
+ fs/f2fs/f2fs.h                         |  10 +-
+ fs/f2fs/file.c                         |  54 ++
+ fs/f2fs/inode.c                        |   7 +-
+ fs/f2fs/super.c                        |  39 ++
+ fs/f2fs/sysfs.c                        |  11 +
+ fs/verity/Kconfig                      |  54 ++
+ fs/verity/Makefile                     |   5 +
+ fs/verity/fsverity_private.h           | 134 ++++
+ fs/verity/hash_algs.c                  | 113 ++++
+ fs/verity/ioctl.c                      | 161 +++++
+ fs/verity/setup.c                      | 904 +++++++++++++++++++++++++
+ fs/verity/signature.c                  | 185 +++++
+ fs/verity/verify.c                     | 295 ++++++++
+ include/linux/fs.h                     |  11 +
+ include/linux/fsverity.h               | 113 ++++
+ include/uapi/linux/fsverity.h          |  98 +++
+ 30 files changed, 3174 insertions(+), 45 deletions(-)
+ create mode 100644 Documentation/filesystems/fsverity.rst
+ create mode 100644 fs/verity/Kconfig
+ create mode 100644 fs/verity/Makefile
+ create mode 100644 fs/verity/fsverity_private.h
+ create mode 100644 fs/verity/hash_algs.c
+ create mode 100644 fs/verity/ioctl.c
+ create mode 100644 fs/verity/setup.c
+ create mode 100644 fs/verity/signature.c
+ create mode 100644 fs/verity/verify.c
+ create mode 100644 include/linux/fsverity.h
+ create mode 100644 include/uapi/linux/fsverity.h
+
+-- 
+2.20.1.97.g81188d93c3-goog
+
